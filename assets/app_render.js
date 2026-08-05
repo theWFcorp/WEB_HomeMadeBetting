@@ -109,8 +109,7 @@ function viewMatch() {
 }
 
 function poster(m) {
-  const dt = new Date(m.dateISO);
-  const dateStr = dt.toLocaleDateString('ru-RU', { weekday: 'long', hour: '2-digit', minute: '2-digit' });
+  const dateStr = fmtMatchDate(m);
   const winMk = m.markets.find(x => x.kind === 'winner');
   const oddA = winMk ? fmtOdd(oddOf(winMk, winMk.selections[0])) : '';
   const oddB = winMk ? fmtOdd(oddOf(winMk, winMk.selections[1])) : '';
@@ -138,7 +137,7 @@ function poster(m) {
       '</div>' +
     '</div>' +
     '<div class="meta-row">' +
-      '<div class="m"><b>' + esc(dateStr) + '</b><span>Начало</span></div>' +
+      '<div class="m"><b>' + esc(dateStr) + '</b><span>' + esc(matchTzLabel(m)) + '</span></div>' +
       '<div class="m"><b>' + esc(m.venueText || '—') + '</b><span>Площадка</span></div>' +
       '<div class="m"><b>Комиссия ' + m.commissionPct + '%</b><span>с выигрыша</span></div>' +
     '</div>' +

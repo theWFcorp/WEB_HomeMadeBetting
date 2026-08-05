@@ -156,14 +156,20 @@ function modalResult() {
 function modalMatchEditor() {
   const m = S.match;
   const f = (id, cap, val, type) => '<label class="field"><span class="cap">' + cap + '</span><input id="' + id + '" ' + (type ? 'type="' + type + '"' : '') + ' value="' + esc(val) + '"></label>';
-  const dtLocal = new Date(m.dateISO); dtLocal.setMinutes(dtLocal.getMinutes() - dtLocal.getTimezoneOffset());
+  const off = matchTzOff(m);
+  const dateVal = matchWall(m).toISOString().slice(0, 16);   // «настенное» время в поясе соревнования
+  const tzOpts = TZ_LIST.map(z => '<option value="' + z.off + '"' + (z.off === off ? ' selected' : '') + '>' + esc(z.label) + '</option>').join('');
   openModal('<h3>Параметры матча</h3>' +
     '<div class="grid-2">' + f('e_pa', 'Игрок A', m.playerA.name) + f('e_pb', 'Игрок B', m.playerB.name) + '</div>' +
     '<div class="grid-2">' + f('e_sa', 'Подпись A', m.playerA.sub || '') + f('e_sb', 'Подпись B', m.playerB.sub || '') + '</div>' +
     f('e_sport', 'Вид спорта', m.sport) +
     '<div class="grid-2">' + f('e_fmt', 'Формат', m.format) + f('e_wins', 'До скольких побед', m.winsTarget, 'number') + '</div>' +
     '<div class="grid-2">' + f('e_venue', 'Площадка', m.venueText || '') + f('e_comm', 'Комиссия, %', m.commissionPct, 'number') + '</div>' +
-    '<label class="field"><span class="cap">Дата и время начала</span><input id="e_date" type="datetime-local" value="' + dtLocal.toISOString().slice(0, 16) + '"></label>' +
+    '<div class="grid-2">' +
+      '<label class="field"><span class="cap">Дата и время начала</span><input id="e_date" type="datetime-local" value="' + dateVal + '"></label>' +
+      '<label class="field"><span class="cap">Часовой пояс соревнования</span><select id="e_tz">' + tzOpts + '</select></label>' +
+    '</div>' +
+    '<p class="hint">Время указывается в выбранном поясе. Обратный отсчёт на главной идёт именно до этого момента.</p>' +
     '<button class="btn primary block" data-act="save-match">Сохранить</button>');
 }
 
@@ -376,13 +382,24 @@ function saveMatch() {
     wins: Number(getVal('#e_wins')) || cur.winsTarget, venue: getVal('#e_venue'),
     comm: clamp(Number(getVal('#e_comm')) || 0, 0, 50), date: getVal('#e_date')
   };
+  // часовой пояс + пересчёт абсолютного момента из «настенного» времени зоны
+  let off = Number(getVal('#e_tz'));
+  if (!TZ_LIST.some(z => z.off === off)) off = matchTzOff(cur);
+  const tzLabel = (TZ_LIST.find(z => z.off === off) || {}).label || DEFAULT_TZ_LABEL;
+  let iso = cur.dateISO;
+  if (v.date) {
+    const parts = v.date.split('T');
+    const [Y, Mo, D] = parts[0].split('-').map(Number);
+    const [H, Mi] = (parts[1] || '00:00').split(':').map(Number);
+    iso = new Date(Date.UTC(Y, Mo - 1, D, H, Mi) - off * 60000).toISOString();
+  }
   closeModal();
   commit(t => {
     t.match.playerA.name = v.pa; t.match.playerB.name = v.pb;
     t.match.playerA.sub = v.sa; t.match.playerB.sub = v.sb;
     t.match.sport = v.sport; t.match.format = v.fmt; t.match.winsTarget = v.wins;
     t.match.venueText = v.venue; t.match.commissionPct = v.comm;
-    if (v.date) t.match.dateISO = new Date(v.date).toISOString();
+    t.match.dateISO = iso; t.match.tzOffset = off; t.match.tzLabel = tzLabel;
   });
   toast('Матч обновлён');
 }

@@ -2635,6 +2635,34 @@ function b64urlDecode(str) {
 function encObj(o) { return b64urlEncode(JSON.stringify(o)); }
 function decObj(s) { try { return JSON.parse(b64urlDecode(s)); } catch (e) { return null; } }
 
+/* ---- часовые пояса ---- */
+const TZ_LIST = [
+  { off: 120, label: 'UTC+2 (Калининград)' },
+  { off: 180, label: 'UTC+3 (Москва)' },
+  { off: 240, label: 'UTC+4 (Самара)' },
+  { off: 300, label: 'UTC+5 (Екатеринбург)' },
+  { off: 360, label: 'UTC+6 (Омск)' },
+  { off: 420, label: 'UTC+7 (Красноярск)' },
+  { off: 480, label: 'UTC+8 (Иркутск)' },
+  { off: 540, label: 'UTC+9 (Якутск)' },
+  { off: 600, label: 'UTC+10 (Владивосток)' },
+  { off: 660, label: 'UTC+11 (Магадан)' },
+  { off: 720, label: 'UTC+12 (Камчатка)' },
+  { off: 0, label: 'UTC+0' },
+  { off: 60, label: 'UTC+1 (Европа)' }
+];
+const DEFAULT_TZ_OFF = 180, DEFAULT_TZ_LABEL = 'UTC+3 (Москва)';
+function matchTzOff(m) { m = m || S.match; return typeof m.tzOffset === 'number' ? m.tzOffset : DEFAULT_TZ_OFF; }
+function matchTzLabel(m) { m = m || S.match; return m.tzLabel || DEFAULT_TZ_LABEL; }
+/* «настенное» время в поясе соревнования (UTC-компоненты сдвинутой даты = локальное время зоны) */
+function matchWall(m) { m = m || S.match; return new Date(new Date(m.dateISO).getTime() + matchTzOff(m) * 60000); }
+function fmtMatchDate(m) {
+  const w = matchWall(m);
+  const days = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'];
+  const p = (n) => String(n).padStart(2, '0');
+  return days[w.getUTCDay()] + ', ' + p(w.getUTCDate()) + '.' + p(w.getUTCMonth() + 1) + ', ' + p(w.getUTCHours()) + ':' + p(w.getUTCMinutes());
+}
+
 /* ---- default match (из постера) ---- */
 function nextWednesday21() {
   const d = new Date();
@@ -2655,6 +2683,7 @@ function seedState() {
     playerA: A, playerB: B,
     format: 'BEST OF 7', winsTarget: 4,
     dateISO: nextWednesday21(),
+    tzOffset: DEFAULT_TZ_OFF, tzLabel: DEFAULT_TZ_LABEL,
     venueText: 'Домашний матч',
     commissionPct: 5,
     oddsMode: 'fixed',                   // 'fixed' | 'dynamic'
@@ -2898,8 +2927,7 @@ function viewMatch() {
 }
 
 function poster(m) {
-  const dt = new Date(m.dateISO);
-  const dateStr = dt.toLocaleDateString('ru-RU', { weekday: 'long', hour: '2-digit', minute: '2-digit' });
+  const dateStr = fmtMatchDate(m);
   const winMk = m.markets.find(x => x.kind === 'winner');
   const oddA = winMk ? fmtOdd(oddOf(winMk, winMk.selections[0])) : '';
   const oddB = winMk ? fmtOdd(oddOf(winMk, winMk.selections[1])) : '';
@@ -2927,7 +2955,7 @@ function poster(m) {
       '</div>' +
     '</div>' +
     '<div class="meta-row">' +
-      '<div class="m"><b>' + esc(dateStr) + '</b><span>Начало</span></div>' +
+      '<div class="m"><b>' + esc(dateStr) + '</b><span>' + esc(matchTzLabel(m)) + '</span></div>' +
       '<div class="m"><b>' + esc(m.venueText || '—') + '</b><span>Площадка</span></div>' +
       '<div class="m"><b>Комиссия ' + m.commissionPct + '%</b><span>с выигрыша</span></div>' +
     '</div>' +
@@ -3528,14 +3556,20 @@ function modalResult() {
 function modalMatchEditor() {
   const m = S.match;
   const f = (id, cap, val, type) => '<label class="field"><span class="cap">' + cap + '</span><input id="' + id + '" ' + (type ? 'type="' + type + '"' : '') + ' value="' + esc(val) + '"></label>';
-  const dtLocal = new Date(m.dateISO); dtLocal.setMinutes(dtLocal.getMinutes() - dtLocal.getTimezoneOffset());
+  const off = matchTzOff(m);
+  const dateVal = matchWall(m).toISOString().slice(0, 16);   // «настенное» время в поясе соревнования
+  const tzOpts = TZ_LIST.map(z => '<option value="' + z.off + '"' + (z.off === off ? ' selected' : '') + '>' + esc(z.label) + '</option>').join('');
   openModal('<h3>Параметры матча</h3>' +
     '<div class="grid-2">' + f('e_pa', 'Игрок A', m.playerA.name) + f('e_pb', 'Игрок B', m.playerB.name) + '</div>' +
     '<div class="grid-2">' + f('e_sa', 'Подпись A', m.playerA.sub || '') + f('e_sb', 'Подпись B', m.playerB.sub || '') + '</div>' +
     f('e_sport', 'Вид спорта', m.sport) +
     '<div class="grid-2">' + f('e_fmt', 'Формат', m.format) + f('e_wins', 'До скольких побед', m.winsTarget, 'number') + '</div>' +
     '<div class="grid-2">' + f('e_venue', 'Площадка', m.venueText || '') + f('e_comm', 'Комиссия, %', m.commissionPct, 'number') + '</div>' +
-    '<label class="field"><span class="cap">Дата и время начала</span><input id="e_date" type="datetime-local" value="' + dtLocal.toISOString().slice(0, 16) + '"></label>' +
+    '<div class="grid-2">' +
+      '<label class="field"><span class="cap">Дата и время начала</span><input id="e_date" type="datetime-local" value="' + dateVal + '"></label>' +
+      '<label class="field"><span class="cap">Часовой пояс соревнования</span><select id="e_tz">' + tzOpts + '</select></label>' +
+    '</div>' +
+    '<p class="hint">Время указывается в выбранном поясе. Обратный отсчёт на главной идёт именно до этого момента.</p>' +
     '<button class="btn primary block" data-act="save-match">Сохранить</button>');
 }
 
@@ -3748,13 +3782,24 @@ function saveMatch() {
     wins: Number(getVal('#e_wins')) || cur.winsTarget, venue: getVal('#e_venue'),
     comm: clamp(Number(getVal('#e_comm')) || 0, 0, 50), date: getVal('#e_date')
   };
+  // часовой пояс + пересчёт абсолютного момента из «настенного» времени зоны
+  let off = Number(getVal('#e_tz'));
+  if (!TZ_LIST.some(z => z.off === off)) off = matchTzOff(cur);
+  const tzLabel = (TZ_LIST.find(z => z.off === off) || {}).label || DEFAULT_TZ_LABEL;
+  let iso = cur.dateISO;
+  if (v.date) {
+    const parts = v.date.split('T');
+    const [Y, Mo, D] = parts[0].split('-').map(Number);
+    const [H, Mi] = (parts[1] || '00:00').split(':').map(Number);
+    iso = new Date(Date.UTC(Y, Mo - 1, D, H, Mi) - off * 60000).toISOString();
+  }
   closeModal();
   commit(t => {
     t.match.playerA.name = v.pa; t.match.playerB.name = v.pb;
     t.match.playerA.sub = v.sa; t.match.playerB.sub = v.sb;
     t.match.sport = v.sport; t.match.format = v.fmt; t.match.winsTarget = v.wins;
     t.match.venueText = v.venue; t.match.commissionPct = v.comm;
-    if (v.date) t.match.dateISO = new Date(v.date).toISOString();
+    t.match.dateISO = iso; t.match.tzOffset = off; t.match.tzLabel = tzLabel;
   });
   toast('Матч обновлён');
 }

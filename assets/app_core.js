@@ -59,6 +59,34 @@ function b64urlDecode(str) {
 function encObj(o) { return b64urlEncode(JSON.stringify(o)); }
 function decObj(s) { try { return JSON.parse(b64urlDecode(s)); } catch (e) { return null; } }
 
+/* ---- часовые пояса ---- */
+const TZ_LIST = [
+  { off: 120, label: 'UTC+2 (Калининград)' },
+  { off: 180, label: 'UTC+3 (Москва)' },
+  { off: 240, label: 'UTC+4 (Самара)' },
+  { off: 300, label: 'UTC+5 (Екатеринбург)' },
+  { off: 360, label: 'UTC+6 (Омск)' },
+  { off: 420, label: 'UTC+7 (Красноярск)' },
+  { off: 480, label: 'UTC+8 (Иркутск)' },
+  { off: 540, label: 'UTC+9 (Якутск)' },
+  { off: 600, label: 'UTC+10 (Владивосток)' },
+  { off: 660, label: 'UTC+11 (Магадан)' },
+  { off: 720, label: 'UTC+12 (Камчатка)' },
+  { off: 0, label: 'UTC+0' },
+  { off: 60, label: 'UTC+1 (Европа)' }
+];
+const DEFAULT_TZ_OFF = 180, DEFAULT_TZ_LABEL = 'UTC+3 (Москва)';
+function matchTzOff(m) { m = m || S.match; return typeof m.tzOffset === 'number' ? m.tzOffset : DEFAULT_TZ_OFF; }
+function matchTzLabel(m) { m = m || S.match; return m.tzLabel || DEFAULT_TZ_LABEL; }
+/* «настенное» время в поясе соревнования (UTC-компоненты сдвинутой даты = локальное время зоны) */
+function matchWall(m) { m = m || S.match; return new Date(new Date(m.dateISO).getTime() + matchTzOff(m) * 60000); }
+function fmtMatchDate(m) {
+  const w = matchWall(m);
+  const days = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'];
+  const p = (n) => String(n).padStart(2, '0');
+  return days[w.getUTCDay()] + ', ' + p(w.getUTCDate()) + '.' + p(w.getUTCMonth() + 1) + ', ' + p(w.getUTCHours()) + ':' + p(w.getUTCMinutes());
+}
+
 /* ---- default match (из постера) ---- */
 function nextWednesday21() {
   const d = new Date();
@@ -79,6 +107,7 @@ function seedState() {
     playerA: A, playerB: B,
     format: 'BEST OF 7', winsTarget: 4,
     dateISO: nextWednesday21(),
+    tzOffset: DEFAULT_TZ_OFF, tzLabel: DEFAULT_TZ_LABEL,
     venueText: 'Домашний матч',
     commissionPct: 5,
     oddsMode: 'fixed',                   // 'fixed' | 'dynamic'
