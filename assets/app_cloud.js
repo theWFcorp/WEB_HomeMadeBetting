@@ -1,7 +1,7 @@
 /* ============ HOMEMADE BETTING — cloud sync (общая база, jsonblob) ============ */
 /* Все устройства работают с одной «комнатой» = общий JSON в интернете.
-   Чтение — опросом каждые несколько секунд; запись — read-modify-write с If-Match,
-   чтобы одновременные ставки не затирали друг друга. Настройка не требуется. */
+   Чтение — опросом; запись — read-modify-write с ретраями и очередью на дослать,
+   чтобы одиночные сбои сети не теряли ставки и не пугали пользователя. */
 const CLOUD = {
   BASE: 'https://jsonblob.com/api/jsonBlob',
   DEFAULT_ROOM: '019fd144-e350-712c-926c-b4a568ca454f',
@@ -10,23 +10,14 @@ const CLOUD = {
   status: 'init',        // init | online | sync | offline
   pendingRender: false,
   pushing: false,
-  fails: 0
+  fails: 0,
+  queue: []              // ожидающие отправки изменения (mutator-функции)
 };
-function cloudFail() { CLOUD.fails++; if (CLOUD.fails >= 3) setSyncStatus('offline'); }
-function cloudOk() { CLOUD.fails = 0; setSyncStatus('online'); }
-async function fetchRoomDoc() {
-  const ctrl = new AbortController();
-  const to = setTimeout(() => ctrl.abort(), 6000);
-  try {
-    const res = await fetch(readURL(), { headers: { 'Accept': 'application/json' }, cache: 'no-store', signal: ctrl.signal });
-    if (!res.ok) throw new Error('http-' + res.status);
-    return await res.json();
-  } finally { clearTimeout(to); }
-}
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 function activeRoom() { return CLOUD.ROOM || CLOUD.DEFAULT_ROOM; }
 function cloudOn() { return CLOUD.status !== 'disabled' && !!activeRoom(); }
 function roomURL() { return CLOUD.BASE + '/' + activeRoom(); }
-function readURL() { return roomURL() + '?cb=' + Date.now() + '_' + Math.floor(performance.now()); } // обход кэша при чтении
+function readURL() { return roomURL() + '?cb=' + Date.now() + '_' + Math.floor(performance.now()); } // обход кэша
 
 function setRoom(id) {
   id = (id || '').trim();
@@ -34,8 +25,10 @@ function setRoom(id) {
   if (id) localStorage.setItem('hmb_room', id);
 }
 
-/* ---- статус связи (бейдж в шапке) ---- */
+/* ---- индикатор связи ---- */
 function setSyncStatus(s) { CLOUD.status = s; updateSyncBadge(); }
+function cloudFail() { CLOUD.fails++; if (CLOUD.fails >= 3 && !CLOUD.queue.length) setSyncStatus('offline'); }
+function cloudOk() { CLOUD.fails = 0; setSyncStatus(CLOUD.queue.length ? 'sync' : 'online'); }
 function syncBadgeHTML() {
   const map = {
     online: ['var(--win)', 'Онлайн'], sync: ['var(--gold)', 'Синхр.'],
@@ -55,8 +48,7 @@ function updateSyncBadge() {
 /* ---- применить облачный документ к локальному состоянию ---- */
 function applyDoc(doc) {
   if (!doc || !doc.match) return false;
-  // не откатываемся на устаревшую версию (защита от гонок опрос/запись)
-  if (typeof doc.rev === 'number' && typeof S._rev === 'number' && doc.rev < S._rev) return false;
+  if (typeof doc.rev === 'number' && typeof S._rev === 'number' && doc.rev < S._rev) return false; // не откат
   S.match = doc.match;
   S.bets = Array.isArray(doc.bets) ? doc.bets : [];
   S.history = Array.isArray(doc.history) ? doc.history : [];
@@ -64,9 +56,7 @@ function applyDoc(doc) {
   saveState();
   return true;
 }
-function stateFingerprint(o) {
-  return JSON.stringify({ m: o.match, b: o.bets, h: o.history });
-}
+function stateFingerprint(o) { return JSON.stringify({ m: o.match, b: o.bets, h: o.history }); }
 function safeRender() {
   const ae = document.activeElement;
   const typing = ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName);
@@ -76,14 +66,24 @@ function safeRender() {
   render();
 }
 
-/* ---- чтение (опрос) ---- */
-async function cloudPull(force) {
+/* ---- fetch с таймаутом (даём серверу больше времени) ---- */
+async function fetchTO(url, opts, ms) {
+  const ctrl = new AbortController();
+  const to = setTimeout(() => ctrl.abort(), ms || 15000);
+  try { return await fetch(url, Object.assign({ signal: ctrl.signal }, opts)); }
+  finally { clearTimeout(to); }
+}
+
+/* ---- чтение (опрос) с коротким ретраем ---- */
+async function cloudPull() {
   if (!cloudOn() || CLOUD.pushing) return;
-  // ETag у jsonblob стабилен → всегда читаем полностью с обходом кэша; короткий ретрай сглаживает эпизодические сбои
   let doc = null;
   for (let i = 0; i < 2 && doc === null; i++) {
-    try { doc = await fetchRoomDoc(); }
-    catch (e) { if (i === 0) await new Promise(r => setTimeout(r, 700)); }
+    try {
+      const res = await fetchTO(readURL(), { headers: { 'Accept': 'application/json' }, cache: 'no-store' }, 12000);
+      if (res.ok) doc = await res.json();
+    } catch (e) {}
+    if (doc === null && i === 0) await sleep(700);
   }
   if (doc === null) { cloudFail(); return; }
   const before = stateFingerprint(S);
@@ -92,49 +92,60 @@ async function cloudPull(force) {
   if (applied && (stateFingerprint(S) !== before || CLOUD.pendingRender)) safeRender();
 }
 
-/* ---- запись (read-modify-write + If-Match, retry при конфликте) ---- */
+/* ---- запись: read-modify-write, ретраи на любую ошибку/конфликт с backoff ---- */
 async function cloudPush(mutator) {
   CLOUD.pushing = true;
   try {
+    let lastErr;
     for (let attempt = 0; attempt < 5; attempt++) {
-      const res = await fetch(readURL(), { headers: { 'Accept': 'application/json' }, cache: 'no-store' });
-      if (!res.ok) throw new Error('get-' + res.status);
-      const etag = res.headers.get('ETag');
-      const doc = await res.json();
-      mutator(doc);
-      doc.rev = (doc.rev || 0) + 1;
-      const h = { 'Content-Type': 'application/json', 'Accept': 'application/json' };
-      if (etag) h['If-Match'] = etag;
-      const put = await fetch(roomURL(), { method: 'PUT', headers: h, body: JSON.stringify(doc) });
-      if (put.ok) {
-        CLOUD.etag = put.headers.get('ETag') || null;
-        S._rev = doc.rev;            // фиксируем версию до applyDoc, чтобы опрос не откатил
-        applyDoc(doc);
-        return doc;
-      }
-      if (put.status === 412 || put.status === 409) continue; // конфликт — перечитать и повторить
-      throw new Error('put-' + put.status);
+      try {
+        const res = await fetchTO(readURL(), { headers: { 'Accept': 'application/json' }, cache: 'no-store' }, 15000);
+        if (!res.ok) throw new Error('get-' + res.status);
+        const etag = res.headers.get('ETag');
+        const doc = await res.json();
+        mutator(doc);
+        doc.rev = (doc.rev || 0) + 1;
+        const h = { 'Content-Type': 'application/json', 'Accept': 'application/json' };
+        if (etag) h['If-Match'] = etag;
+        const put = await fetchTO(roomURL(), { method: 'PUT', headers: h, body: JSON.stringify(doc) }, 15000);
+        if (put.ok) { CLOUD.etag = put.headers.get('ETag') || null; S._rev = doc.rev; applyDoc(doc); return doc; }
+        lastErr = new Error('put-' + put.status);
+        // 412/409 — конфликт: просто перечитать и повторить; прочее — тоже повторить
+      } catch (e) { lastErr = e; }
+      await sleep(600 * (attempt + 1)); // 0.6s, 1.2s, 1.8s, 2.4s
     }
-    throw new Error('conflict');
+    throw lastErr || new Error('push-failed');
   } finally { CLOUD.pushing = false; }
 }
 
-/* ---- единая точка изменения состояния ----
-   mutator(target) применяет изменение к {match,bets,history}.
-   Оффлайн — сразу к локальному S; онлайн — оптимистично локально + запись в облако. */
+/* ---- очередь на дослать: изменения не теряются при сбоях сети ---- */
+async function flushQueue() {
+  if (!cloudOn() || CLOUD.pushing || !CLOUD.queue.length) return;
+  const batch = CLOUD.queue.slice();
+  try {
+    await cloudPush(doc => batch.forEach(m => m(doc)));
+    CLOUD.queue = CLOUD.queue.slice(batch.length);   // убрать отправленные
+    CLOUD.queue.forEach(m => m(S)); saveState();      // сохранить оставшиеся оптимистично
+    cloudOk(); render();
+  } catch (e) {
+    setSyncStatus('sync');                            // не пугаем — повторим в фоне
+  }
+}
+
+/* ---- единая точка изменения состояния ---- */
 function commit(mutator) {
   if (!cloudOn()) { mutator(S); saveState(); render(); return; }
+  mutator(S); saveState(); render();                  // мгновенный отклик
+  CLOUD.queue.push(mutator);
   setSyncStatus('sync');
-  mutator(S); saveState(); render();          // мгновенный отклик
-  cloudPush(mutator)
-    .then(() => { cloudOk(); render(); })
-    .catch(() => { setSyncStatus('offline'); toast('Нет связи — сохранено локально'); });
+  flushQueue();
 }
 
 /* ---- запуск синхронизации ---- */
 function startCloudSync() {
   if (!cloudOn()) { setSyncStatus('disabled'); return; }
   setSyncStatus('init');
-  cloudPull(true);
+  cloudPull();
   setInterval(cloudPull, 8000);
+  setInterval(flushQueue, 3500);                      // регулярно дожимаем очередь
 }
