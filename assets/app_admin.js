@@ -86,8 +86,29 @@ function matchConfig() {
   delete m.result;
   return { t: 'hmb-match', v: HMB.VER, match: m };
 }
-function inviteURL() { return location.origin + location.pathname + '#i=' + encObj(matchConfig()); }
-function resultsURL() { return location.origin + location.pathname + '#r=' + encObj({ t: 'hmb-res', v: HMB.VER, match: S.match, bets: S.bets }); }
+function inviteURL() {
+  if (cloudOn()) return location.origin + location.pathname + '#room=' + activeRoom();
+  return location.origin + location.pathname + '#i=' + encObj(matchConfig());
+}
+function resultsURL() {
+  if (cloudOn()) return inviteURL();
+  return location.origin + location.pathname + '#r=' + encObj({ t: 'hmb-res', v: HMB.VER, match: S.match, bets: S.bets });
+}
+function modalSync() {
+  const labels = { online: 'Онлайн', sync: 'Синхронизация', offline: 'Нет связи', init: 'Подключение', disabled: 'Локально' };
+  openModal('<h3>Общая база</h3>' +
+    '<p class="hint">' + (cloudOn()
+      ? 'Онлайн-режим включён. Прогнозы всех участников хранятся в общей базе в интернете и синхронизируются между устройствами автоматически — как на обычном сайте.'
+      : 'Онлайн-режим выключен: данные хранятся только на этом устройстве.') + '</p>' +
+    '<div class="row" style="margin-top:12px">' +
+      '<div class="chip">Статус: <b>' + (labels[CLOUD.status] || '—') + '</b></div>' +
+      '<div class="chip">Комната: <b>' + esc(activeRoom().slice(0, 8)) + '…</b></div>' +
+    '</div>' +
+    '<div class="row" style="margin-top:14px">' +
+      '<button class="btn primary" data-act="open-invite">' + icon('qr') + ' Пригласить / QR</button>' +
+      '<button class="btn ghost" data-act="cloud-refresh">Обновить сейчас</button>' +
+    '</div>');
+}
 
 function modalInvite() {
   const url = inviteURL();
@@ -96,7 +117,7 @@ function modalInvite() {
     const q = qrcode(0, 'L'); q.addData(url); q.make();
     qr = q.createImgTag(4, 8);
   } catch (e) { qr = '<p class="hint">Ссылка длинновата для QR — используйте кнопку «Копировать ссылку».</p>'; }
-  openModal('<h3>Пригласить участников</h3><p class="hint">Отправьте ссылку друзьям — они откроют матч и сделают прогноз. Работает без сервера.</p>' +
+  openModal('<h3>Пригласить участников</h3><p class="hint">Отправьте ссылку друзьям — они откроют этот же матч и сделают прогноз. Все прогнозы автоматически появятся у всех: общая база синхронизируется между устройствами.</p>' +
     '<div class="qr-box" style="margin:14px 0">' + qr + '</div>' +
     '<div class="code-box" id="invite-url">' + esc(url) + '</div>' +
     '<div class="row" style="margin-top:12px">' +
@@ -212,11 +233,14 @@ function submitBet() {
   });
   if (!picks.length) { toast('Укажите суммы прогнозов'); return; }
   setName(name);
-  const existing = findBet(name);
-  if (existing) { existing.picks = picks; existing.editedAt = Date.now(); }
-  else S.bets.push({ id: uid('bet'), participant: name, picks, createdAt: Date.now() });
+  const key = name.trim().toLowerCase();
   UI.slip = []; UI.editingBetId = null;
-  saveState(); toast('Прогноз сохранён ✓'); go('me');
+  commit(t => {
+    const ex = t.bets.find(b => b.participant.trim().toLowerCase() === key);
+    if (ex) { ex.picks = picks; ex.editedAt = Date.now(); }
+    else t.bets.push({ id: uid('bet'), participant: name, picks, createdAt: Date.now() });
+  });
+  toast('Прогноз сохранён ✓'); go('me');
 }
 function loadMyBet() {
   const name = (getVal('#bet-name') || getVal('#me-name') || UI.name || '').trim();
@@ -231,34 +255,38 @@ function saveResult() {
   const outcomes = {};
   S.match.markets.forEach(mk => { const v = getVal('#res_' + mk.id); if (v) outcomes[mk.id] = v; });
   const scoreText = getVal('#res_score') || '';
-  S.match.result = { outcomes, scoreText };
-  S.match.status = 'finished';
-  saveState(); closeModal(); toast('Матч рассчитан ✓'); go('leaders');
+  closeModal();
+  commit(t => { t.match.result = { outcomes, scoreText }; t.match.status = 'finished'; });
+  toast('Матч рассчитан ✓'); go('leaders');
 }
-function newMatch() {
+async function newMatch() {
   if (!confirm('Текущий матч будет перенесён в историю, начнётся новый. Продолжить?')) return;
-  if (S.match.status === 'finished' || S.bets.length) archiveCurrent();
-  const fresh = seedState();
-  fresh.match.playerA = { ...S.match.playerA };
-  fresh.match.playerB = { ...S.match.playerB };
-  fresh.match.oddsMode = S.match.oddsMode;
-  fresh.match.commissionPct = S.match.commissionPct;
-  fresh.match.markets = JSON.parse(JSON.stringify(S.match.markets)); // те же рынки
-  fresh.match.result = null; fresh.match.status = 'open';
-  S.match = fresh.match; S.bets = [];
-  saveState(); toast('Новый матч создан'); go('match');
+  if (cloudOn()) await cloudPull(true);            // свежие данные перед архивацией
+  const snap = (S.match.status === 'finished' || S.bets.length) ? buildHistorySnapshot() : null;
+  const players = { a: { ...S.match.playerA }, b: { ...S.match.playerB } };
+  const mode = S.match.oddsMode, comm = S.match.commissionPct;
+  const markets = JSON.parse(JSON.stringify(S.match.markets));
+  commit(t => {
+    if (snap) t.history.push(snap);
+    const f = seedState().match;
+    f.playerA = players.a; f.playerB = players.b;
+    f.oddsMode = mode; f.commissionPct = comm;
+    f.markets = markets; f.result = null; f.status = 'open';
+    t.match = f; t.bets = [];
+  });
+  toast('Новый матч создан'); go('match');
 }
-function archiveCurrent() {
+function buildHistorySnapshot() {
   const winMk = S.match.markets.find(x => x.kind === 'winner');
   const winSel = winMk && S.match.result && S.match.result.outcomes ? winMk.selections.find(s => s.id === S.match.result.outcomes[winMk.id]) : null;
   const lb = leaderboard().map(r => ({ name: r.name, profit: Math.round(r.profit), won: r.won, settled: r.settled }));
-  S.history.push({
+  return {
     title: S.match.title, playerA: S.match.playerA.name, playerB: S.match.playerB.name,
     dateStr: new Date(S.match.dateISO).toLocaleDateString('ru-RU'),
     winner: winSel ? winSel.label : '—',
     scoreText: S.match.result ? S.match.result.scoreText : '',
     bank: totalBank(), participants: participants().length, leaderboard: lb
-  });
+  };
 }
 
 /* ============ delegated events ============ */
@@ -277,7 +305,7 @@ function onClick(e) {
     case 'submit-bet': submitBet(); break;
     case 'load-my-bet': loadMyBet(); break;
     case 'my-ticket': { const b = findBet(UI.name); if (b) modalTicket(b); break; }
-    case 'del-my-bet': { const b = findBet(UI.name); if (b && confirm('Удалить ваш прогноз?')) { S.bets = S.bets.filter(x => x !== b); saveState(); render(); } break; }
+    case 'del-my-bet': { const key = (UI.name || '').trim().toLowerCase(); if (findBet(UI.name) && confirm('Удалить ваш прогноз?')) commit(t => { t.bets = t.bets.filter(b => b.participant.trim().toLowerCase() !== key); }); break; }
     case 'open-invite': modalInvite(); break;
     case 'open-import': modalImport(); break;
     case 'import-save': doImport(); break;
@@ -285,20 +313,22 @@ function onClick(e) {
     case 'modal-backdrop': if (e.target === t) closeModal(); break;
     case 'copy': { const el = $('#' + d.copy); copyText(el ? (el.value || el.textContent) : ''); break; }
     case 'native-share': if (navigator.share) navigator.share({ title: 'HomeMade Betting', url: inviteURL() }).catch(() => {}); break;
+    case 'sync-info': modalSync(); break;
+    case 'cloud-refresh': cloudPull(true); toast('Обновлено'); closeModal(); break;
     case 'admin-unlock': if (getVal('#admin-pin') === S.settings.adminPin) { UI.adminUnlocked = true; sessionStorage.setItem('hmb_admin', '1'); render(); } else toast('Неверный PIN'); break;
-    case 'set-status': S.match.status = d.status; saveState(); render(); toast(d.status === 'open' ? 'Приём открыт' : 'Приём закрыт'); break;
-    case 'set-mode': S.match.oddsMode = d.mode; saveState(); render(); break;
+    case 'set-status': { const st = d.status; commit(t => { t.match.status = st; }); toast(st === 'open' ? 'Приём открыт' : 'Приём закрыт'); break; }
+    case 'set-mode': { const md = d.mode; commit(t => { t.match.oddsMode = md; }); break; }
     case 'edit-match': modalMatchEditor(); break;
     case 'save-match': saveMatch(); break;
     case 'open-result': modalResult(); break;
     case 'save-result': saveResult(); break;
-    case 'reopen': S.match.status = 'open'; S.match.result = null; saveState(); closeModal(); render(); break;
+    case 'reopen': closeModal(); commit(t => { t.match.status = 'open'; t.match.result = null; }); break;
     case 'add-market': modalAddMarket(); break;
     case 'add-market-save': addMarket(); break;
-    case 'del-market': if (confirm('Удалить рынок?')) { S.match.markets = S.match.markets.filter(m => m.id !== d.market); saveState(); render(); } break;
+    case 'del-market': { const mid = d.market; if (confirm('Удалить рынок?')) commit(t => { t.match.markets = t.match.markets.filter(m => m.id !== mid); }); break; }
     case 'add-sel': addSel(d.market); break;
     case 'del-sel': delSel(d.market, d.sel); break;
-    case 'del-bet': if (confirm('Удалить прогноз участника?')) { S.bets = S.bets.filter(b => b.id !== d.id); saveState(); render(); } break;
+    case 'del-bet': { const id = d.id; if (confirm('Удалить прогноз участника?')) commit(t => { t.bets = t.bets.filter(b => b.id !== id); }); break; }
     case 'export-json': exportJSON(); break;
     case 'export-csv': exportCSV(); break;
     case 'results-link': showLink('Ссылка на результаты', resultsURL()); break;
@@ -316,46 +346,66 @@ function onInput(e) {
 }
 function onChange(e) {
   const t = e.target.closest('[data-act]'); if (!t) return;
-  if (t.dataset.act === 'me-name') { setName(t.value.trim()); render(); }
-  else if (t.dataset.act === 'slip-stake') render();
+  const a = t.dataset.act, mid = t.dataset.market, sid = t.dataset.sel;
+  if (a === 'me-name') { setName(t.value.trim()); render(); }
+  else if (a === 'slip-stake') render();
+  else if (a === 'sel-odd') { const val = Math.max(1.01, Number(t.value) || 1.01); commit(x => { const m = x.match.markets.find(y => y.id === mid); const s = m && m.selections.find(y => y.id === sid); if (s) s.odd = val; }); }
+  else if (a === 'sel-label') { const val = t.value; commit(x => { const m = x.match.markets.find(y => y.id === mid); const s = m && m.selections.find(y => y.id === sid); if (s) s.label = val; }); }
 }
 function findSel(mid, sid) { const m = S.match.markets.find(x => x.id === mid); return m && m.selections.find(x => x.id === sid); }
-function addSel(mid) { const m = S.match.markets.find(x => x.id === mid); if (m) { m.selections.push({ id: uid('sel'), label: 'Новый исход', odd: 2.00 }); saveState(); render(); } }
-function delSel(mid, sid) { const m = S.match.markets.find(x => x.id === mid); if (m) { m.selections = m.selections.filter(s => s.id !== sid); saveState(); render(); } }
+function addSel(mid) {
+  const sel = { id: uid('sel'), label: 'Новый исход', odd: 2.00 };
+  commit(t => { const m = t.match.markets.find(x => x.id === mid); if (m) m.selections.push(sel); });
+}
+function delSel(mid, sid) {
+  commit(t => { const m = t.match.markets.find(x => x.id === mid); if (m) m.selections = m.selections.filter(s => s.id !== sid); });
+}
 function addMarket() {
   const name = getVal('#nm_name').trim(); if (!name) { toast('Введите название'); return; }
   const kind = getVal('#nm_kind') || 'custom';
-  S.match.markets.push({ id: uid('mk'), name, kind, selections: [] });
-  saveState(); closeModal(); render();
+  const mk = { id: uid('mk'), name, kind, selections: [] };
+  closeModal();
+  commit(t => { t.match.markets.push(mk); });
 }
 function saveMatch() {
-  const m = S.match;
-  m.playerA.name = getVal('#e_pa') || m.playerA.name;
-  m.playerB.name = getVal('#e_pb') || m.playerB.name;
-  m.playerA.sub = getVal('#e_sa'); m.playerB.sub = getVal('#e_sb');
-  m.sport = getVal('#e_sport') || m.sport;
-  m.format = getVal('#e_fmt') || m.format;
-  m.winsTarget = Number(getVal('#e_wins')) || m.winsTarget;
-  m.venueText = getVal('#e_venue');
-  m.commissionPct = clamp(Number(getVal('#e_comm')) || 0, 0, 50);
-  const dv = getVal('#e_date'); if (dv) m.dateISO = new Date(dv).toISOString();
-  saveState(); closeModal(); render(); toast('Матч обновлён');
+  const cur = S.match;
+  const v = {
+    pa: getVal('#e_pa') || cur.playerA.name, pb: getVal('#e_pb') || cur.playerB.name,
+    sa: getVal('#e_sa'), sb: getVal('#e_sb'),
+    sport: getVal('#e_sport') || cur.sport, fmt: getVal('#e_fmt') || cur.format,
+    wins: Number(getVal('#e_wins')) || cur.winsTarget, venue: getVal('#e_venue'),
+    comm: clamp(Number(getVal('#e_comm')) || 0, 0, 50), date: getVal('#e_date')
+  };
+  closeModal();
+  commit(t => {
+    t.match.playerA.name = v.pa; t.match.playerB.name = v.pb;
+    t.match.playerA.sub = v.sa; t.match.playerB.sub = v.sb;
+    t.match.sport = v.sport; t.match.format = v.fmt; t.match.winsTarget = v.wins;
+    t.match.venueText = v.venue; t.match.commissionPct = v.comm;
+    if (v.date) t.match.dateISO = new Date(v.date).toISOString();
+  });
+  toast('Матч обновлён');
 }
 function doImport() {
   const txt = getVal('#import-area') || '';
-  let n = 0;
+  const incoming = [];
   txt.split(/\r?\n/).forEach(line => {
     line = line.trim(); if (!line) return;
     const code = line.startsWith('HMB1:') ? line.slice(5) : line;
     const obj = decObj(code);
-    if (obj && obj.participant && Array.isArray(obj.picks)) {
-      const ex = findBet(obj.participant);
-      if (ex) ex.picks = obj.picks;
-      else S.bets.push({ id: uid('bet'), participant: obj.participant, picks: obj.picks, createdAt: Date.now() });
-      n++;
-    }
+    if (obj && obj.participant && Array.isArray(obj.picks)) incoming.push(obj);
   });
-  saveState(); closeModal(); render(); toast(n ? ('Импортировано: ' + n) : 'Коды не распознаны');
+  closeModal();
+  if (!incoming.length) { toast('Коды не распознаны'); return; }
+  commit(t => {
+    incoming.forEach(obj => {
+      const key = obj.participant.trim().toLowerCase();
+      const ex = t.bets.find(b => b.participant.trim().toLowerCase() === key);
+      if (ex) ex.picks = obj.picks;
+      else t.bets.push({ id: uid('bet'), participant: obj.participant, picks: obj.picks, createdAt: Date.now() });
+    });
+  });
+  toast('Импортировано: ' + incoming.length);
 }
 function showLink(title, url) {
   openModal('<h3>' + esc(title) + '</h3><div class="code-box" id="share-link" style="margin:12px 0">' + esc(url) + '</div>' +
@@ -396,6 +446,7 @@ function startCountdown() {
 function handleHash() {
   const hash = location.hash || '';
   const clean = () => history.replaceState(null, '', location.pathname + location.search);
+  if (hash.startsWith('#room=')) { setRoom(decodeURIComponent(hash.slice(6))); clean(); return; }
   if (hash.startsWith('#i=')) {
     const obj = decObj(hash.slice(3));
     if (obj && obj.match) {
@@ -473,6 +524,7 @@ function init() {
   document.addEventListener('change', onChange);
   startCountdown();
   render();
+  startCloudSync();
 }
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
 else init();

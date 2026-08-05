@@ -80,6 +80,7 @@ function renderChrome() {
     '</div>' +
     '<span class="pill ' + cls + '"><span class="dot"></span>' + esc(label) + '</span>' +
     '<span class="spacer"></span>' +
+    syncBadgeHTML() +
     '<button class="icon-btn" data-act="theme" aria-label="Сменить тему">' + icon(themeIsDark() ? 'sun' : 'moon') + '</button>';
 
   const tabs = [
@@ -143,8 +144,10 @@ function poster(m) {
     '</div>' +
     '<div class="row" style="justify-content:center;margin-top:16px">' +
       '<button class="btn gold sm" data-act="open-invite">' + icon('qr') + ' Пригласить / QR</button>' +
-      (S.match.status === 'open' ? '<button class="btn primary sm" data-act="go" data-view="bet">' + icon('bet') + ' Сделать прогноз</button>' : '') +
     '</div>' +
+    (m.status === 'open'
+      ? '<div class="poster-cta">Выберите исход ниже, чтобы сделать прогноз ↓</div>'
+      : '') +
   '</div></div>';
 }
 

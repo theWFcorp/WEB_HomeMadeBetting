@@ -156,6 +156,8 @@ img{max-width:100%}
 .meta-row .m{display:flex;flex-direction:column;align-items:center;gap:2px}
 .meta-row .m b{font-family:'Oswald';font-weight:600;font-size:16px;letter-spacing:.04em}
 .meta-row .m span{font-size:10px;letter-spacing:.22em;text-transform:uppercase;color:var(--muted)}
+.poster-cta{margin-top:14px;text-align:center;font-family:'Oswald';font-weight:600;letter-spacing:.04em;text-transform:uppercase;font-size:13px;color:var(--gold);animation:ctabob 1.8s ease-in-out infinite}
+@keyframes ctabob{0%,100%{transform:translateY(0)}50%{transform:translateY(3px)}}
 
 /* ===== stat strip ===== */
 .stat-strip{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:14px}
