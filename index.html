@@ -2699,7 +2699,10 @@ function seedMarkets() {
 
 /* ============ ODDS ENGINE ============ */
 /* Возвращает актуальный кэф выбора в зависимости от режима матча. */
-const DYN_ANCHOR = 200; // «инерция» стартовых кэфов (в виртуальных единицах)
+const DYN_ANCHOR = 200;   // «инерция» стартовых кэфов (в виртуальных единицах)
+const DYN_MAXMULT = 2;    // потолок: динамический кэф не выше 2× от стартового (без разлётов)
+const DYN_MAXABS = 10;    // и абсолютный потолок динамического кэфа
+const DYN_MIN = 1.05;     // пол динамического кэфа
 
 function marketStakes(marketId) {
   const map = {};
@@ -2724,7 +2727,9 @@ function dynamicOdds(market) {
   const out = {};
   market.selections.forEach(sel => {
     const p = eff[sel.id] / total;
-    out[sel.id] = Math.max(1.01, Math.round(((1 - comm) / p) * 100) / 100);
+    let o = (1 - comm) / p;
+    o = Math.min(o, sel.odd * DYN_MAXMULT, DYN_MAXABS);   // потолок: 2× от стартового и не выше 10
+    out[sel.id] = Math.max(DYN_MIN, Math.round(o * 100) / 100);
   });
   return out;
 }
