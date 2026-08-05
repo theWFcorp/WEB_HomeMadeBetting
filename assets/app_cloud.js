@@ -74,18 +74,23 @@ async function fetchTO(url, opts, ms) {
   finally { clearTimeout(to); }
 }
 
-/* ---- чтение (опрос) с коротким ретраем ---- */
+/* ---- чтение (опрос) с коротким ретраем; 429 (лимит) — не считаем обрывом ---- */
 async function cloudPull() {
-  if (!cloudOn() || CLOUD.pushing) return;
-  let doc = null;
+  if (!cloudOn() || CLOUD.pushing || document.hidden) return;   // фоновую вкладку не опрашиваем
+  let doc = null, rate = false;
   for (let i = 0; i < 2 && doc === null; i++) {
     try {
       const res = await fetchTO(readURL(), { headers: { 'Accept': 'application/json' }, cache: 'no-store' }, 12000);
+      if (res.status === 429) { rate = true; break; }           // превышен лимит — просто пропустим тик
       if (res.ok) doc = await res.json();
     } catch (e) {}
-    if (doc === null && i === 0) await sleep(700);
+    if (doc === null && !rate && i === 0) await sleep(700);
   }
-  if (doc === null) { cloudFail(); return; }
+  if (doc === null) {
+    if (rate && CLOUD.status === 'init') setSyncStatus('online'); // связь есть, только лимит
+    else if (!rate) cloudFail();
+    return;
+  }
   const before = stateFingerprint(S);
   const applied = applyDoc(doc);
   cloudOk();
@@ -96,10 +101,12 @@ async function cloudPull() {
 async function cloudPush(mutator) {
   CLOUD.pushing = true;
   try {
-    let lastErr;
-    for (let attempt = 0; attempt < 5; attempt++) {
+    let lastErr, rate = false;
+    for (let attempt = 0; attempt < 6; attempt++) {
+      rate = false;
       try {
         const res = await fetchTO(readURL(), { headers: { 'Accept': 'application/json' }, cache: 'no-store' }, 15000);
+        if (res.status === 429) { rate = true; throw new Error('rate'); }
         if (!res.ok) throw new Error('get-' + res.status);
         const etag = res.headers.get('ETag');
         const doc = await res.json();
@@ -109,10 +116,11 @@ async function cloudPush(mutator) {
         if (etag) h['If-Match'] = etag;
         const put = await fetchTO(roomURL(), { method: 'PUT', headers: h, body: JSON.stringify(doc) }, 15000);
         if (put.ok) { CLOUD.etag = put.headers.get('ETag') || null; S._rev = doc.rev; applyDoc(doc); return doc; }
+        if (put.status === 429) rate = true;
         lastErr = new Error('put-' + put.status);
-        // 412/409 — конфликт: просто перечитать и повторить; прочее — тоже повторить
-      } catch (e) { lastErr = e; }
-      await sleep(600 * (attempt + 1)); // 0.6s, 1.2s, 1.8s, 2.4s
+      } catch (e) { lastErr = e; if (e.message === 'rate') rate = true; }
+      // при лимите (429) ждём заметно дольше, иначе обычный backoff
+      await sleep((rate ? 2000 : 600) * (attempt + 1));
     }
     throw lastErr || new Error('push-failed');
   } finally { CLOUD.pushing = false; }
@@ -146,6 +154,8 @@ function startCloudSync() {
   if (!cloudOn()) { setSyncStatus('disabled'); return; }
   setSyncStatus('init');
   cloudPull();
-  setInterval(cloudPull, 8000);
-  setInterval(flushQueue, 3500);                      // регулярно дожимаем очередь
+  setInterval(cloudPull, 12000);                      // реже опрос → меньше шанс упереться в лимит по IP
+  setInterval(flushQueue, 4000);                      // очередь дожимаем чаще (запросы шлёт только когда есть что дослать)
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) { cloudPull(); flushQueue(); } });
+  window.addEventListener('online', () => { cloudPull(); flushQueue(); });
 }
