@@ -129,6 +129,7 @@ img{max-width:100%}
 .card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow-sm)}
 .card.pad{padding:18px}
 .section-title{display:flex;align-items:center;gap:10px;margin:26px 2px 12px;text-transform:uppercase;letter-spacing:.1em;font-size:13px;color:var(--muted);font-family:'Oswald';font-weight:600}
+.section-title>svg{width:16px;height:16px;flex:0 0 auto;color:var(--cyan)}
 .section-title .line{flex:1;height:1px;background:linear-gradient(90deg,var(--line-2),transparent)}
 
 /* ===== POSTER ===== */
@@ -150,6 +151,7 @@ img{max-width:100%}
   filter:drop-shadow(0 2px 0 rgba(0,0,0,.4)) drop-shadow(0 0 22px rgba(255,204,63,.35))}
 .bo-sub{font-family:'Oswald';font-weight:600;letter-spacing:.34em;font-size:12px;text-transform:uppercase;color:#0c1220;background:linear-gradient(90deg,var(--gold),var(--gold-2));padding:4px 12px;border-radius:6px}
 .sport-tag{display:inline-flex;align-items:center;gap:6px;color:var(--cyan);font-size:11px;letter-spacing:.22em;text-transform:uppercase;font-family:'Oswald';font-weight:600}
+.sport-tag svg{width:14px;height:14px;flex:0 0 auto}
 
 .vs-row{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:8px;margin-top:16px}
 .player{display:flex;flex-direction:column;align-items:center;gap:10px;text-align:center}
@@ -2594,12 +2596,20 @@ function fmtSigned(n) {
 function fmtOdd(n) { return (Number(n) || 0).toFixed(2); }
 
 /* ---- persistence ---- */
+const DEFAULT_PIN = '4554';
+function migrateState(s) {
+  s.settings = s.settings || {};
+  if (s.settings.theme === undefined) s.settings.theme = '';
+  // защита админки по умолчанию: если PIN не задан и защиту не убирали осознанно
+  if (!s.settings.adminPin && !s.settings.noPin) s.settings.adminPin = DEFAULT_PIN;
+  return s;
+}
 function loadState() {
   try {
     const raw = localStorage.getItem(HMB.KEY);
-    if (raw) { const s = JSON.parse(raw); if (s && s.match) return s; }
+    if (raw) { const s = JSON.parse(raw); if (s && s.match) return migrateState(s); }
   } catch (e) {}
-  return seedState();
+  return migrateState(seedState());
 }
 function saveState() {
   try { localStorage.setItem(HMB.KEY, JSON.stringify(S)); } catch (e) {}
@@ -3345,7 +3355,7 @@ function modalAddMarket() {
 }
 
 function modalSetPin() {
-  openModal('<h3>PIN администратора</h3><p class="hint">Оставьте поле пустым, чтобы убрать PIN.</p>' +
+  openModal('<h3>PIN администратора</h3><p class="hint">По умолчанию вход в админку защищён PIN-кодом. Введите новый код или оставьте поле пустым, чтобы полностью убрать защиту.</p>' +
     '<label class="field"><span class="cap">Новый PIN</span><input id="new-pin" type="password" inputmode="numeric" autocomplete="off"></label>' +
     '<button class="btn primary block" data-act="save-pin">Сохранить</button>');
 }
@@ -3493,7 +3503,7 @@ function onClick(e) {
     case 'export-csv': exportCSV(); break;
     case 'results-link': showLink('Ссылка на результаты', resultsURL()); break;
     case 'set-pin': modalSetPin(); break;
-    case 'save-pin': S.settings.adminPin = getVal('#new-pin'); UI.adminUnlocked = true; sessionStorage.setItem('hmb_admin', '1'); saveState(); closeModal(); render(); toast('PIN обновлён'); break;
+    case 'save-pin': { const pin = (getVal('#new-pin') || '').trim(); S.settings.adminPin = pin; S.settings.noPin = !pin; UI.adminUnlocked = true; sessionStorage.setItem('hmb_admin', '1'); saveState(); closeModal(); render(); toast(pin ? 'PIN обновлён' : 'Защита снята'); break; }
     case 'new-match': newMatch(); break;
   }
 }

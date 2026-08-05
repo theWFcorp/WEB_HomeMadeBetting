@@ -22,12 +22,20 @@ function fmtSigned(n) {
 function fmtOdd(n) { return (Number(n) || 0).toFixed(2); }
 
 /* ---- persistence ---- */
+const DEFAULT_PIN = '4554';
+function migrateState(s) {
+  s.settings = s.settings || {};
+  if (s.settings.theme === undefined) s.settings.theme = '';
+  // защита админки по умолчанию: если PIN не задан и защиту не убирали осознанно
+  if (!s.settings.adminPin && !s.settings.noPin) s.settings.adminPin = DEFAULT_PIN;
+  return s;
+}
 function loadState() {
   try {
     const raw = localStorage.getItem(HMB.KEY);
-    if (raw) { const s = JSON.parse(raw); if (s && s.match) return s; }
+    if (raw) { const s = JSON.parse(raw); if (s && s.match) return migrateState(s); }
   } catch (e) {}
-  return seedState();
+  return migrateState(seedState());
 }
 function saveState() {
   try { localStorage.setItem(HMB.KEY, JSON.stringify(S)); } catch (e) {}

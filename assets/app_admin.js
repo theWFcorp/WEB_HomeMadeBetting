@@ -155,7 +155,7 @@ function modalAddMarket() {
 }
 
 function modalSetPin() {
-  openModal('<h3>PIN администратора</h3><p class="hint">Оставьте поле пустым, чтобы убрать PIN.</p>' +
+  openModal('<h3>PIN администратора</h3><p class="hint">По умолчанию вход в админку защищён PIN-кодом. Введите новый код или оставьте поле пустым, чтобы полностью убрать защиту.</p>' +
     '<label class="field"><span class="cap">Новый PIN</span><input id="new-pin" type="password" inputmode="numeric" autocomplete="off"></label>' +
     '<button class="btn primary block" data-act="save-pin">Сохранить</button>');
 }
@@ -303,7 +303,7 @@ function onClick(e) {
     case 'export-csv': exportCSV(); break;
     case 'results-link': showLink('Ссылка на результаты', resultsURL()); break;
     case 'set-pin': modalSetPin(); break;
-    case 'save-pin': S.settings.adminPin = getVal('#new-pin'); UI.adminUnlocked = true; sessionStorage.setItem('hmb_admin', '1'); saveState(); closeModal(); render(); toast('PIN обновлён'); break;
+    case 'save-pin': { const pin = (getVal('#new-pin') || '').trim(); S.settings.adminPin = pin; S.settings.noPin = !pin; UI.adminUnlocked = true; sessionStorage.setItem('hmb_admin', '1'); saveState(); closeModal(); render(); toast(pin ? 'PIN обновлён' : 'Защита снята'); break; }
     case 'new-match': newMatch(); break;
   }
 }
