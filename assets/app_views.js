@@ -10,8 +10,17 @@ function selInfo(marketId, selectionId) {
 function viewBet() {
   const open = S.match.status === 'open';
   if (!open) {
-    return banner('Приём прогнозов закрыт', 'Администратор закрыл приём. Загляни в «Рейтинг», чтобы увидеть расчёт.') +
-      leadersPreview();
+    const finished = S.match.status === 'finished';
+    let html = banner(finished ? 'Матч завершён' : 'Приём прогнозов закрыт',
+      finished ? 'Ниже — ваши прогнозы и итог. Общий расчёт — во вкладке «Рейтинг».'
+               : 'Приём закрыт. Ваши прогнозы ниже; итог появится после ввода результата.');
+    html += '<div class="card pad"><label class="field"><span class="cap">Ваше имя</span>' +
+      '<input id="me-name" placeholder="Введите имя" value="' + esc(UI.name) + '" data-act="me-name"></label></div>';
+    const bet = findBet(UI.name);
+    if (!UI.name) html += '<p class="empty">Введите имя, чтобы увидеть свои прогнозы.</p>';
+    else if (!bet) html += '<div class="empty"><div class="big">🤔</div>Прогноза с именем «' + esc(UI.name) + '» не найдено.</div>';
+    else html += betCoupon(bet, true);
+    return html;
   }
   let html = '<div class="section-title">' + icon('bet') + ' Ваш прогноз <span class="line"></span></div>';
   html += '<div class="card pad">' +
@@ -123,6 +132,10 @@ function viewLeaders() {
   }
   const lb = leaderboard();
   if (!lb.length) { html += '<p class="empty">Ставок не было.</p>'; return html; }
+  const tot = lb.reduce((a, r) => ({
+    staked: a.staked + r.staked, returned: a.returned + r.returned,
+    won: a.won + r.won, settled: a.settled + r.settled, profit: a.profit + r.profit
+  }), { staked: 0, returned: 0, won: 0, settled: 0, profit: 0 });
   html += '<div class="tbl-wrap"><table><thead><tr><th>#</th><th>Участник</th><th class="num">Ставка</th><th class="num">Возврат</th><th class="num">Точность</th><th class="num">Прибыль</th></tr></thead><tbody>' +
     lb.map((r, i) => {
       const medal = ['🥇', '🥈', '🥉'][i] || (i + 1);
@@ -132,7 +145,13 @@ function viewLeaders() {
         '<td class="num">' + fmtMoney(r.returned) + '</td>' +
         '<td class="num">' + r.won + '/' + r.settled + '</td>' +
         '<td class="num ' + (r.profit >= 0 ? 'pos' : 'neg') + '">' + fmtSigned(r.profit) + '</td></tr>';
-    }).join('') + '</tbody></table></div>';
+    }).join('') + '</tbody>' +
+    '<tfoot><tr><td></td><td>Итого</td>' +
+      '<td class="num">' + fmtMoney(tot.staked) + '</td>' +
+      '<td class="num">' + fmtMoney(tot.returned) + '</td>' +
+      '<td class="num">' + tot.won + '/' + tot.settled + '</td>' +
+      '<td class="num ' + (tot.profit >= 0 ? 'pos' : 'neg') + '">' + fmtSigned(tot.profit) + '</td></tr></tfoot>' +
+    '</table></div>';
   html += popularityBlock();
   return html;
 }
