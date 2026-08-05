@@ -53,6 +53,10 @@ function viewAdmin() {
       '<td class="num"><button class="btn danger sm" data-act="del-bet" data-id="' + b.id + '">Удалить</button></td></tr>').join('') +
     '</tbody></table></div>';
 
+  // детализация: кто на что ставил
+  if (S.bets.length) h += '<div class="section-title">Кто на что ставил <span class="line"></span></div>' +
+    S.bets.map(b => betCoupon(b, false)).join('');
+
   // экспорт / прочее
   h += '<div class="section-title">Экспорт и завершение <span class="line"></span></div>' +
     '<div class="card pad"><div class="row">' +
@@ -145,7 +149,7 @@ function modalResult() {
     mk.selections.map(s => '<option value="' + s.id + '"' + (m.result && m.result.outcomes && m.result.outcomes[mk.id] === s.id ? ' selected' : '') + '>' + esc(s.label) + '</option>').join('');
   const blocks = m.markets.map(mk => '<label class="field"><span class="cap">' + esc(mk.name) + '</span><select id="res_' + mk.id + '">' + opts(mk) + '</select></label>').join('');
   openModal('<h3>Результат матча</h3><p class="hint">Укажите победивший исход в каждом рынке. Расчёт произойдёт автоматически.</p>' +
-    '<label class="field"><span class="cap">Итоговый счёт (для постера)</span><input id="res_score" placeholder="например 4:2" value="' + esc(m.result ? (m.result.scoreText || '') : '') + '"></label>' +
+    '<label class="field"><span class="cap">Итоговый счёт (для постера)</span><input id="final_score" placeholder="например 4:2" value="' + esc(m.result ? (m.result.scoreText || '') : '') + '"></label>' +
     blocks +
     '<div class="row" style="margin-top:8px">' +
       (m.status === 'finished' ? '<button class="btn ghost" data-act="reopen">Вернуть в приём</button>' : '') +
@@ -260,7 +264,7 @@ function loadMyBet() {
 function saveResult() {
   const outcomes = {};
   S.match.markets.forEach(mk => { const v = getVal('#res_' + mk.id); if (v) outcomes[mk.id] = v; });
-  const scoreText = getVal('#res_score') || '';
+  const scoreText = getVal('#final_score') || '';
   closeModal();
   commit(t => { t.match.result = { outcomes, scoreText }; t.match.status = 'finished'; });
   toast('Матч рассчитан ✓'); go('leaders');
